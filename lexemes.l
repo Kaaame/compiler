@@ -26,9 +26,10 @@ int yyerror(const char *msg,...);
 \!\=							{return NEQ;}
 \-\>							{printf("pointer/sizeptr\n");return 'p';}
 "i32"							{printf("INT_32\n"); return INT_32;};
-"d32"							{printf("DOUB_32\n"); return DOUB_32;};
-"c8"							{printf("CHAR_8\n"); return CHAR_8;};
+"f32"							{printf("FLOAT_32\n"); return FLOAT_32;};
+"cstr"							{printf("CSTR\n"); return CSTR;};
 "if"							{printf("IF\n"); return IF;};
+"else"							{printf("IF\n"); return ELSE;};
 "while"							{printf("WHILE\n"); return WHILE;};
 "pushheap"						{printf("PUSHHEAP\n"); return PUSHHEAP;};
 "str"							{printf("STRING\n"); return STRING;};
