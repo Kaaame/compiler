@@ -10,7 +10,7 @@
 #include <map>
 
 #define OUTPUT_STREAM stdout
-#define printf(x)
+#define printf(...)
 
 #define INFILE_ERROR 1
 #define OUTFILE_ERROR 2
@@ -25,7 +25,15 @@ using namespace std;
 
 typedef struct
 {
+	int size;
+	int type;
 	string value;
+	string name;	
+} var_info;
+
+typedef struct
+{
+	var_info info;
 	int token;
 } stack_pair;
 
@@ -34,6 +42,7 @@ stack<string> gEtiqStack;
 
 map<string, int> dataSegmentSymbols;
 vector<string> textSegment;
+vector<string> dataSegment;
 
 static int var_num = 0;
 static int etiq_num = 0;
@@ -42,28 +51,24 @@ int else_op = 0;
 
 void remove_pair(char op);
 void generate_mips_asm(stack_pair *op1, stack_pair *op2, char op);
-void make_line_asm(stack_pair *, int);
+void make_line_asm(stack_pair *, string, int);
+void load_addr_asm(stack_pair *, int);
 void make_conv_asm(stack_pair *, int);
 void make_op_asm(stack_pair *, stack_pair *, char);
-void make_store_asm(stack_pair *);
+void make_store_asm(string, int, string);
 
 void write_textseg();
 void write_dataseg();
 
-void make_jmp_asm(int, string);
+void store_global(stack_pair);
+void make_cond_jmp_asm(int, string, int, int);
 void make_uncond_jmp_asm(string);
-void gen_syscall(int);
+void gen_syscall(int, string);
 
 
 stack_pair gEl;
 string gStringEl;
-/*
-type
-	: INT_32 IDENTIFER
-	| DOUB_32 IDENTIFER
-	| CHAR_8 IDENTIFER
-	;
-*/
+
 %}
 %union 
 {char *text;
@@ -72,9 +77,10 @@ double dval;};
 %token <text> IDENTIFER
 %token <ival> INTEGER_VAL
 %token <dval> DOUBLE_VAL
+%token <text> STR_LITERAL
 %token IF ELSE PUSHHEAP WHILE STRING FOR
 %token LEQ EQ NEQ GEQ
-%token INT_32 FLOAT_32 CSTR
+%token INT_32 FLOAT_32 CSTR 
 %token SPEAKI SPEAKF SPEAKS SCANI SCANF
 %%
 multistmt
@@ -86,16 +92,39 @@ stmt
 	| io_expr ';'
 	| if_expr				{}
 	| type ';'				{/*dataSegmentSymbols.insert(pair<string, int>(gStringEl, INT_32));*/;}
+	| for_expr
 	//| type assign ';'
 	;
 type
-	: INT_32 IDENTIFER							{dataSegmentSymbols.insert(pair<string, int>($2, INT_32));}
-	| FLOAT_32 IDENTIFER						{dataSegmentSymbols.insert(pair<string, int>($2, FLOAT_32));}
-	| CSTR IDENTIFER '=' '\"' IDENTIFER	'\"'	{dataSegmentSymbols.insert(pair<string, int>($2, CSTR));}
+	: INT_32 IDENTIFER							{
+													/*cout << "$2 = " << $2 << "\n";*/
+													gEl.info.name = $2; gEl.info.value = "0";
+													gEl.info.size = 1; gEl.info.type = INT_32;
+													gEl.token = IDENTIFER;
+													store_global(gEl);
+													/*dataSegmentSymbols.insert(pair<string, int>($2, INT_32));*/
+												}
+	| FLOAT_32 IDENTIFER						{	
+													gEl.info.name = $2; gEl.info.value = "0.0";
+													gEl.info.size = 1; gEl.info.type = FLOAT_32;
+													gEl.token = IDENTIFER;
+													store_global(gEl);
+													/*dataSegmentSymbols.insert(pair<string, int>($2, FLOAT_32));*/
+												}
+	| CSTR IDENTIFER '=' STR_LITERAL			{
+													gEl.info.name = $2; gEl.info.value = $4;
+													gEl.info.size = 1; gEl.info.type = CSTR;
+													gEl.token = IDENTIFER;
+
+													store_global(gEl);
+													/*gEl.value = $2;
+													gEl.token = IDENTIFER;
+													gStack.push(gEl);*/
+												}
 	;
 assign
 	: IDENTIFER '=' expr	{fprintf(dropfile, "%s = ", $1);
-							gEl.value = $1; gEl.token = IDENTIFER;
+							gEl.info.name = $1; gEl.token = IDENTIFER;
 							gStack.push(gEl);
 							remove_pair('=');}
 	;
@@ -121,40 +150,49 @@ else_expr
 											// textSegment.push_back(res);
 										}
 	;
+for_expr
+	: for_begin '{' multistmt '}'
+									{
+										
+									}
+	|	for_begin '{' '}'
+	;
 else_begin
-	: ELSE 					{
-								string res = gEtiqStack.top() + ":\n";
-								gEtiqStack.pop();
+	: ELSE
+		{
+			string res = gEtiqStack.top() + ":\n";
+			gEtiqStack.pop();
 
-								string lbl = "LBL" + to_string(etiq_num);
-								make_uncond_jmp_asm(lbl);
+			string lbl = "LBL" + to_string(etiq_num);
+			make_uncond_jmp_asm(lbl);
+			etiq_num++;
 
-								
-								textSegment.push_back(res);//last label
-
-								
-								//string lbl = "LBL" + to_string(etiq_num);
-								//make_jmp_asm(last_op, lbl);
-
-								/*string lbl = "LBL" + to_string(etiq_num);
-								make_jmp_asm(last_op, lbl);*/
-							}
+			
+			textSegment.push_back(res);//last label
+		}
 	;
 if_begin
 	: IF '(' cond_expr ')'	{
 								string lbl = "LBL" + to_string(etiq_num);
-								make_jmp_asm(last_op, lbl);
+								make_cond_jmp_asm(last_op, lbl, 0, 1);
+								etiq_num++;
+							}
+	;
+for_begin
+	: FOR '(' IDENTIFER ';' cond_expr ';' INTEGER_VAL ')'	
+							{
+								
 							}
 	;
 cond_expr
 	: expr op_logic expr
 	;
 io_expr
-	: SPEAKI '(' expr ')'	{gen_syscall(SPEAKI);}
-	| SPEAKF '(' expr ')'
-	| SPEAKS '(' expr ')'
-	| SCANI '(' expr ')'
-	| SCANF '(' expr ')'
+	: SPEAKI '(' IDENTIFER ')'		{gen_syscall(SPEAKI, $3);}
+	| SPEAKF '(' IDENTIFER ')'		{gen_syscall(SPEAKF, $3);}
+	| SPEAKS '(' IDENTIFER ')'	{gen_syscall(SPEAKS, $3);}
+	| SCANI '(' IDENTIFER ')'	{gen_syscall(SCANI, $3);}
+	| SCANF '(' IDENTIFER ')'	{gen_syscall(SCANF, $3);}
 	;
 expr
 	: expr '+' component 	{fprintf(dropfile, " + ");remove_pair('+');}
@@ -176,15 +214,15 @@ op_logic
 	;
 factor
 	:IDENTIFER				{fprintf(dropfile, "%s ", $1);
-							// gStringEl = $1;
-							// cout << "elo" << gStringEl << "\n";
-							gEl.value = $1; gEl.token = IDENTIFER;
-							gStack.push(gEl);} 
+							gEl.info.name = $1; gEl.token = IDENTIFER; gEl.info.value = ""; gEl.info.size = 0;
+							gStack.push(gEl);}
 	|INTEGER_VAL            {fprintf(dropfile, "%d ", $1);
-							gEl.value = to_string($1); gEl.token = INTEGER_VAL;
+							gEl.info.value = to_string($1); gEl.token = INTEGER_VAL;
+							gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
 							gStack.push(gEl);}
     |DOUBLE_VAL				{fprintf(dropfile, "%f ", $1);
-							gEl.value = to_string($1); gEl.token = DOUBLE_VAL;
+							gEl.info.value = to_string($1); gEl.token = DOUBLE_VAL;
+							gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = FLOAT_32;
 							gStack.push(gEl);}
 	|'(' expr ')'			{printf("expression in parentheses\n");}
 	;
@@ -203,6 +241,10 @@ void write_dataseg()
 {
 	ostringstream oss;
 	fprintf(yyout, ".data\n");
+	// for(const auto &it : dataSegment)
+	// {
+	// 	fprintf(yyout,"\t%s\n", it.c_str());
+	// }
 	for(map<string,int>::iterator it = dataSegmentSymbols.begin();
 		it != dataSegmentSymbols.end(); ++it)
 	{
@@ -219,7 +261,7 @@ void write_dataseg()
 				oss <<".float\t0\n";
 				break;
 			}
-			case IDENTIFER:
+			case CSTR:
 			{
 				oss <<".ascii\t0\n";
 				break;
@@ -230,26 +272,59 @@ void write_dataseg()
 				break;
 			}
 		}
-		// if(it->second == INTEGER_VAL)
-		// {
-		// 	oss <<".word\t0\n";
-		// }
-		// else
-		// {
-		// 	oss <<".word\t0\n";
-		// 	//oss <<".double\t0.0\n";
-		// }
-		//cout << oss.str();
 		fprintf(yyout, "\t%s", oss.str().c_str());
 		oss.str("");
 		oss.clear();
 	}
 }
-void gen_syscall(int type)
+
+void store_global(stack_pair el)
+{
+	// cout <<"var_name = " << var_name << "\n";
+	// cout <<"type = " << type << "\n";
+	// cout <<"var_value = " << var_value << "\n";
+
+	string hold = el.info.name + ":\t";
+
+	switch(el.info.type)
+	{
+		case INTEGER_VAL:
+		case INT_32:
+		{
+			hold += ".word\t";
+			break;
+		}
+		case FLOAT_32:
+		case DOUBLE_VAL:
+		{
+			hold += ".float\t";
+			break;
+		}
+		case CSTR:
+		case IDENTIFER:
+		{
+			hold += ".asciiz\t";
+			break;
+		}
+		default:
+		{
+			hold += ".word\t";
+			break;
+		}
+	}
+
+	hold += el.info.value;
+
+	//dataSegment.push_back(hold);
+	dataSegmentSymbols.insert(pair<string, int>(el.info.name, el.token));
+
+}
+
+void gen_syscall(int type, string id)
 {
 	ostringstream oss;
 	stack_pair op1;
-	string pt;
+	string rgstr;
 	oss << "#" ;
 	
 	switch(type)
@@ -257,34 +332,79 @@ void gen_syscall(int type)
 		//SPEAKI SPEAKF SPEAKS SCANI SCANF
 		case SPEAKI:
 			oss << "SPEAKI(";
-			//pt = 
+			rgstr = "$a";
+			op1.token = IDENTIFER;//change to function argument		
 		break;
 		case SPEAKF:
 			oss << "SPEAKF(";
+			rgstr = "$f";
+			op1.token = IDENTIFER;
 		break;
 		case SPEAKS:
 			oss << "SPEAKS(";
+			rgstr = "$a";
+			op1.token = CSTR;
 		break;
 		case SCANI:
 			oss << "SCANI(";
+			rgstr = "$v";
 		break;
 		case SCANF:
 			oss << "SCANF(";
+			rgstr = "$f";
 		break;		
 	}
 
-	op1 = gStack.top();
-	gStack.pop();
+	//op1 = gStack.top();
+	//gStack.pop();
+	//op1.token = type;
+	op1.info.name = id;
 
-	oss << op1.value << ")\n";
+	oss << op1.info.name << ")\n";
 	textSegment.push_back(oss.str());
-	cout << oss.str();
+	//cout << oss.str();
 	oss.str("");
 	oss.clear();
 
+	switch(type)
+	{
+		//SPEAKI SPEAKF SPEAKS SCANI SCANF
+		case SPEAKI:
+			oss << "li $v0, 1\n";
+		break;
+		case SPEAKF:
+			oss << "li $v0, 2\n";
+		break;
+		case SPEAKS:
+			oss << "li $v0, 4\n";
+		break;
+		case SCANI:
+			oss << "li $v0, 5\n";
+		break;
+		case SCANF:
+			oss << "li $v0, 6\n";
+		break;		
+	
+	}
 
+	//make_line_asm(&op1, 0);
 
-	make_line_asm(&op1, 0);
+	textSegment.push_back(oss.str());
+	oss.str("");
+	oss.clear();
+	if(type == SPEAKI || type == SPEAKF || type == SPEAKS)
+	{
+		make_line_asm(&op1, rgstr, 0);
+		oss << "syscall\n";
+		textSegment.push_back(oss.str());
+	}
+	else
+	{
+		oss << "syscall\n";
+		textSegment.push_back(oss.str());
+		make_store_asm(rgstr, 0, id);
+	}
+	
 }
 
 void make_uncond_jmp_asm(string label)
@@ -300,10 +420,16 @@ void make_uncond_jmp_asm(string label)
 	textSegment.push_back(oss.str());
 
 	gEtiqStack.push(label);
-	etiq_num++;
 }
 
-void make_jmp_asm(int condition, string label)
+void load_addr_asm(stack_pair *arg, int nr)
+{
+	ostringstream oss;
+	oss << "lw $a" << to_string(nr) << ", "<< arg->info.name << "\n";
+	textSegment.push_back(oss.str());
+}
+
+void make_cond_jmp_asm(int condition, string label, int rgstr1, int rgstr2)
 {
 	ostringstream oss;
 	stack_pair op1;
@@ -355,38 +481,62 @@ void make_jmp_asm(int condition, string label)
 	op2 = gStack.top();
 	gStack.pop();
 
-	oss  << op_cond << " " << op2.value << " " << op1.value << "\n";
+	if(op2.token == IDENTIFER)
+	{
+		oss << op2.info.name;
+	}
+	else
+	{
+		oss << op2.info.value;
+	}
+
+	oss << " " << op_cond << " ";
+
+	if(op1.token == IDENTIFER)
+	{
+		oss << op1.info.name;
+	}
+	else
+	{
+		oss << op1.info.value;
+	}
+
+	oss << "\n";
 	//cout << oss.str();
 	textSegment.push_back(oss.str());
 	oss.str("");
 	oss.clear();
 
-	make_line_asm(&op2, 0);
-	make_line_asm(&op1, 1);
-	oss << op_cond << " $t0, $t1, " << label << "\n";
+	make_line_asm(&op2, "$t", rgstr1);
+	make_line_asm(&op1, "$t", rgstr2);
+	oss << op_cond  << " $t" << to_string(rgstr1)
+					<< ", $t" << rgstr2 << ", " << label << "\n";
 	gEtiqStack.push(label);
 	textSegment.push_back(oss.str());
-	etiq_num++;
 }
 
-void make_line_asm(stack_pair *arg, int nr)
+void make_line_asm(stack_pair *arg, string rgstr, int nr)
 {
 	ostringstream oss;
 	switch(arg->token)
 	{
 		case INTEGER_VAL:
 		{
-			oss << "li $t" << to_string(nr) << ", "<< arg->value << "\n";
+			oss << "li "<< rgstr << to_string(nr) << ", "<< arg->info.value << "\n";
 		}
 		break;
 		case IDENTIFER:
 		{
-			oss << "lw $t" << to_string(nr) << ", "<< arg->value << "\n";
+			oss << "lw "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
 		}
 		break;
 		case DOUBLE_VAL:
 		{
-			oss << "l.s $t" << to_string(nr) << ", "<< arg->value << "\n";
+			oss << "l.s "<< rgstr << to_string(nr) << ", "<< arg->info.value << "\n";
+		}
+		case CSTR:
+		{
+			oss << "la "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
 		}
 		break;
 	}
@@ -428,24 +578,24 @@ void make_op_asm(stack_pair *left, stack_pair *right, char op)
 		break;
 	}
 	
-	if(left->token == INTEGER_VAL && right->token == INTEGER_VAL)
-	{
+	// if(left->token == INTEGER_VAL && right->token == INTEGER_VAL)
+	// {
+	// 	oss << " $t0, $t0, $t1\n";
+	// }
+	// else if(left->token == IDENTIFER && right->token == INTEGER_VAL ||
+	// 		left->token == INTEGER_VAL && right->token == IDENTIFER)
+	// {
 		oss << " $t0, $t0, $t1\n";
-	}
-	else if(left->token == IDENTIFER && right->token == INTEGER_VAL ||
-			left->token == INTEGER_VAL && right->token == IDENTIFER)
-	{
-		oss << " $t0, $t0, $t1\n";
-	}
-	else
-	{
-		//oss << ".s $f0, $f0, $f1\n";
-	}
+	// }//??????????????????????????????????????
+	// else
+	// {
+	// 	//oss << ".s $f0, $f0, $f1\n";
+	// }
 	//cout << oss.str() << endl;
 	textSegment.push_back(oss.str());
 }
 
-void make_store_asm(stack_pair *arg)
+void make_store_asm(string from, int fromnr, string to)
 {
 	ostringstream oss;
 	// if(arg->token == INTEGER_VAL)
@@ -454,7 +604,8 @@ void make_store_asm(stack_pair *arg)
 	// }
 	// else if(arg->token == IDENTIFER)
 	// {
-		oss << "sw $t0, " << arg->value << "\n\n";
+		//oss << "sw $t0, " << arg->value << "\n\n";
+		oss << "sw " << from << to_string(fromnr) << ", " << to << "\n\n";
 	// }
 	// else
 	// {
@@ -467,10 +618,13 @@ void make_store_asm(stack_pair *arg)
 
 void generate_mips_asm(stack_pair *left, stack_pair *right, char op)
 {
-	make_line_asm(left, 0);
-	make_line_asm(right, 1);
-	make_op_asm(left, right, op);
-	make_store_asm(left);
+	// make_line_asm(left, 0);
+	// make_line_asm(right, 1);
+	// make_op_asm(left, right, op);
+	// make_store_asm(left);
+
+
+
 	//makelineasm(z1, 0)
 	//optional conversion flaot->int->float
 	//makelineasm(z1, 1)
@@ -497,31 +651,64 @@ void remove_pair(char op)
 	//   if op1.type == ID -> FLOAT ->l.s f
 
 	//generate_mips_asm(&op2, &op1, op);
-	oss << "#retval_" << var_num << " = " << op2.value << " " << op1.value << " " << op << "\n";
+	oss << "#retval_" << var_num << " = ";
+	if(op2.token == IDENTIFER)
+	{
+		oss << op2.info.name;
+	}
+	else
+	{
+		oss << op2.info.value;
+	}
+
+	oss << " ";
+
+	if(op1.token == IDENTIFER)
+	{
+		oss << op1.info.name;
+	}
+	else
+	{
+		oss << op1.info.value;
+	}
+
+	oss << " " << op << "\n";
 	textSegment.push_back(oss.str());
+	// cout << "op1 name = "	<< op1.info.name	<< '\n'
+	// 	 << "op1 value = "	<< op1.info.value	<< "\n";
 	//cout << oss.str() << endl;
 	oss.str("");
 	oss.clear();
 
+	string rgstr;//op1 i op2
+
 	if(op != '=')
 	{
 		oss << "retval_" << var_num;
-		gEl.value = oss.str();
+		//gEl.value = oss.str();
+		gEl.info.value = "0";
+		gEl.info.name = oss.str();
+		gEl.info.size = 1;
+		gEl.info.type = INT_32;
 		gEl.token = IDENTIFER;
-		dataSegmentSymbols.insert(pair<string, int>(oss.str(), INTEGER_VAL));//wynika z op1 i op2
+		//dataSegmentSymbols.insert(pair<string, int>(oss.str(), INTEGER_VAL));//wynika z op1 i op2
+		store_global(gEl);
 		gStack.push(gEl);
 		var_num++;
 
-		make_line_asm(&op2, 0);
-		make_line_asm(&op1, 1);
+		make_line_asm(&op2, "$t", 0);
+		make_line_asm(&op1, "$t", 1);
 		make_op_asm(&op2, &op1, op);
-		make_store_asm(&gEl);
+		//make_store_asm(&gEl);
+		make_store_asm("$t", 0, gEl.info.name);
+		//make_store_asm("$t", 0, gEl.value);
 
 	}
 	else
 	{
-		make_line_asm(&op2, 0);
-		make_store_asm(&op1);
+		make_line_asm(&op2, "$t", 0);
+		//make_store_asm(&op1);
+		make_store_asm("$t", 0, op1.info.name);
 		
 		//dataSegmentSymbols.insert(pair<string, int>(op1.value, IDENTIFER));//przeniesc instrukcje do miejsca deklaracji
 	}
@@ -567,12 +754,8 @@ int main(int argc, char **argv)
 	// fsthree.open("thrices.res", fstream::out);
 	fsrpn.open("RPN_output.res", fstream::in);
 
-	while(!gStack.empty())
+	if(!gStack.empty())
 	{
-
-		// gEl = gStack.top();
-		// cout << gEl.value << '\n';
-		// gStack.pop();
 		yyerror("Brak pustego stosu!");
 	}
 	
