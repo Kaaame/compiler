@@ -23,28 +23,39 @@ extern FILE* yyin;
 
 using namespace std;
 
-typedef struct
+//struct var_info;
+
+struct var_info
 {
 	int size;
 	int type;
 	string value;
-	string name;	
-} var_info;
+	string name;
+	//int register?
+	//overloading lt op, so we can use this struct as key in dataSegmentSymbols
+	bool operator< (const var_info& el) const
+	{
+		return (name.compare(el.name));
+	}
+};
 
-typedef struct
+
+
+struct stack_pair
 {
 	var_info info;
 	int token;
-} stack_pair;
+};
 
 stack<stack_pair> gStack;
 stack<string> gEtiqStack;
 
-map<string, int> dataSegmentSymbols;
+map<var_info, int> dataSegmentSymbols;
 vector<string> textSegment;
 vector<string> dataSegment;
 
 static int var_num = 0;
+//static int for_num = 0;
 static int etiq_num = 0;
 int last_op = 0;
 int else_op = 0;
@@ -54,17 +65,21 @@ void generate_mips_asm(stack_pair *op1, stack_pair *op2, char op);
 void make_line_asm(stack_pair *, string, int);
 void load_addr_asm(stack_pair *, int);
 void make_conv_asm(stack_pair *, int);
-void make_op_asm(stack_pair *, stack_pair *, char);
+void make_op_asm(char, int, int, int);
 void make_store_asm(string, int, string);
 
 void write_textseg();
 void write_dataseg();
 
 void store_global(stack_pair);
+void find_dataseg_item(string, stack_pair *);
+
 void make_cond_jmp_asm(int, string, int, int);
 void make_uncond_jmp_asm(string);
 void gen_syscall(int, string);
 
+void make_for_begin_asm(string, int);
+void make_for_expr_asm();
 
 stack_pair gEl;
 string gStringEl;
@@ -153,9 +168,21 @@ else_expr
 for_expr
 	: for_begin '{' multistmt '}'
 									{
-										
+										make_for_expr_asm();
 									}
 	|	for_begin '{' '}'
+									{
+										make_for_expr_asm();
+										// string lastlbl = gEtiqStack.top();
+										// gEtiqStack.pop();
+
+										// string firstlbl = gEtiqStack.top();
+										// gEtiqStack.pop();
+
+										// make_uncond_jmp_asm(firstlbl);
+
+										// textSegment.push_back(lastlbl + ":\n");//last label
+									}
 	;
 else_begin
 	: ELSE
@@ -165,6 +192,7 @@ else_begin
 
 			string lbl = "LBL" + to_string(etiq_num);
 			make_uncond_jmp_asm(lbl);
+			gEtiqStack.push(lbl);
 			etiq_num++;
 
 			
@@ -175,13 +203,39 @@ if_begin
 	: IF '(' cond_expr ')'	{
 								string lbl = "LBL" + to_string(etiq_num);
 								make_cond_jmp_asm(last_op, lbl, 0, 1);
+								gEtiqStack.push(lbl);
 								etiq_num++;
 							}
 	;
 for_begin
-	: FOR '(' IDENTIFER ';' cond_expr ';' INTEGER_VAL ')'	
+	: FOR '(' IDENTIFER ';' cond_expr ';' INTEGER_VAL ')'
 							{
+								make_for_begin_asm($3, $7);
+
+								// string firstlbl = "LBL" + to_string(etiq_num);
+								// etiq_num++;
+								// gEtiqStack.push(firstlbl);
+
+								// string lastlbl = "LBL" + to_string(etiq_num);
+								// etiq_num++;
+								// gEtiqStack.push(lastlbl);
+
+								// textSegment.push_back(firstlbl + ":\n");//last label
 								
+								// make_cond_jmp_asm(last_op, lastlbl, 4, 5);
+
+								// stack_pair el;
+								// find_dataseg_item($3, &el);
+								
+								// gEl.info.value = to_string($7); gEl.token = INTEGER_VAL;
+								// gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+
+								// textSegment.push_back("#it += " + to_string($7) + "\n");
+								// make_line_asm(&el, "$t", 4);
+								// make_line_asm(&gEl, "$t", 5);//substitute magic nr?
+								// make_op_asm('+', INT_32, 4, 5);
+								// make_store_asm("$t", 4, el.info.name);
+								/*this might be bad, icreasing iterator right after jmp*/
 							}
 	;
 cond_expr
@@ -245,11 +299,10 @@ void write_dataseg()
 	// {
 	// 	fprintf(yyout,"\t%s\n", it.c_str());
 	// }
-	for(map<string,int>::iterator it = dataSegmentSymbols.begin();
-		it != dataSegmentSymbols.end(); ++it)
+	for (auto const& x : dataSegmentSymbols)
 	{
-		oss << it->first <<":\t";
-		switch(it->second)
+		oss << x.first.name <<":\t";
+		switch(x.second)
 		{
 			case INTEGER_VAL:
 			{
@@ -275,6 +328,57 @@ void write_dataseg()
 		fprintf(yyout, "\t%s", oss.str().c_str());
 		oss.str("");
 		oss.clear();
+	}
+	// for(map<var_info,int>::iterator it = dataSegmentSymbols.begin();
+	// 	it != dataSegmentSymbols.end(); ++it)
+	// {
+	// 	auto name = it->first;
+	// 	oss << name.name <<":\t";
+	// 	switch(it->second)
+	// 	{
+	// 		case INTEGER_VAL:
+	// 		{
+	// 			oss <<".word\t0\n";
+	// 			break;
+	// 		}
+	// 		case FLOAT_32:
+	// 		{
+	// 			oss <<".float\t0\n";
+	// 			break;
+	// 		}
+	// 		case CSTR:
+	// 		{
+	// 			oss <<".ascii\t0\n";
+	// 			break;
+	// 		}
+	// 		default:
+	// 		{
+	// 			oss <<".word\t0\n";
+	// 			break;
+	// 		}
+	// 	}
+	// 	fprintf(yyout, "\t%s", oss.str().c_str());
+	// 	oss.str("");
+	// 	oss.clear();
+	// }
+}
+
+void find_dataseg_item(string name, stack_pair *res)
+{
+	for(map<var_info,int>::iterator it = dataSegmentSymbols.begin();
+		it != dataSegmentSymbols.end(); ++it)
+	{
+		if(it->first.name == name)
+		{
+			//best way to copy it?
+			res->token = IDENTIFER;
+			res->info.name = it->first.name;
+			res->info.size = it->first.size;
+			res->info.value = it->first.value;
+			res->info.type = it->first.type;
+
+			break;
+		}
 	}
 }
 
@@ -316,7 +420,7 @@ void store_global(stack_pair el)
 	hold += el.info.value;
 
 	//dataSegment.push_back(hold);
-	dataSegmentSymbols.insert(pair<string, int>(el.info.name, el.token));
+	dataSegmentSymbols.insert(pair<var_info, int>(el.info, el.token));
 
 }
 
@@ -407,6 +511,48 @@ void gen_syscall(int type, string id)
 	
 }
 
+//easily modifiable to not change initializing variable
+void make_for_begin_asm(string begin_stmt_name, int iter_increase)
+{
+	string firstlbl = "LBL" + to_string(etiq_num);
+	etiq_num++;
+	gEtiqStack.push(firstlbl);
+
+	string lastlbl = "LBL" + to_string(etiq_num);
+	etiq_num++;
+	gEtiqStack.push(lastlbl);
+
+	textSegment.push_back(firstlbl + ":\n");//last label
+	
+	make_cond_jmp_asm(last_op, lastlbl, 4, 5);
+
+	stack_pair el;
+	find_dataseg_item(begin_stmt_name, &el);
+	
+	gEl.info.value = to_string(iter_increase); gEl.token = INTEGER_VAL;
+	gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+
+	textSegment.push_back("#it += " + to_string(iter_increase) + "\n");
+	make_line_asm(&el, "$t", 4);
+	make_line_asm(&gEl, "$t", 5);//substitute magic nr?
+	make_op_asm('+', INT_32, 4, 5);
+	make_store_asm("$t", 4, el.info.name);
+	/*this might be bad, icreasing iterator right after jmp*/
+}
+
+void make_for_expr_asm()
+{
+	string lastlbl = gEtiqStack.top();
+	gEtiqStack.pop();
+
+	string firstlbl = gEtiqStack.top();
+	gEtiqStack.pop();
+
+	make_uncond_jmp_asm(firstlbl);
+
+	textSegment.push_back(lastlbl + ":\n");//last label
+}
+
 void make_uncond_jmp_asm(string label)
 {
 	ostringstream oss;
@@ -419,7 +565,7 @@ void make_uncond_jmp_asm(string label)
 	oss << "j " << label << "\n\n";
 	textSegment.push_back(oss.str());
 
-	gEtiqStack.push(label);
+	//gEtiqStack.push(label);
 }
 
 void load_addr_asm(stack_pair *arg, int nr)
@@ -511,7 +657,7 @@ void make_cond_jmp_asm(int condition, string label, int rgstr1, int rgstr2)
 	make_line_asm(&op1, "$t", rgstr2);
 	oss << op_cond  << " $t" << to_string(rgstr1)
 					<< ", $t" << rgstr2 << ", " << label << "\n";
-	gEtiqStack.push(label);
+	//gEtiqStack.push(label);
 	textSegment.push_back(oss.str());
 }
 
@@ -549,10 +695,10 @@ void make_conv_asm(stack_pair *arg, int type)
 
 }
 
-void make_op_asm(stack_pair *left, stack_pair *right, char op)
+void make_op_asm(char op, int type, int nr_to, int nr_sec)
 {
 	ostringstream oss;
-
+	string rgstr = ((type == INT_32) ? "$t" : "$f"); 
 	switch(op)
 	{
 		case '+':
@@ -577,7 +723,10 @@ void make_op_asm(stack_pair *left, stack_pair *right, char op)
 		}
 		break;
 	}
-	
+	if(type == FLOAT_32)
+	{
+		oss << ".s";
+	}
 	// if(left->token == INTEGER_VAL && right->token == INTEGER_VAL)
 	// {
 	// 	oss << " $t0, $t0, $t1\n";
@@ -585,7 +734,11 @@ void make_op_asm(stack_pair *left, stack_pair *right, char op)
 	// else if(left->token == IDENTIFER && right->token == INTEGER_VAL ||
 	// 		left->token == INTEGER_VAL && right->token == IDENTIFER)
 	// {
-		oss << " $t0, $t0, $t1\n";
+		oss << " "  << rgstr << to_string(nr_to) << ", "
+					<< rgstr << to_string(nr_to) << ", "
+					<< rgstr << to_string(nr_sec) << "\n";
+
+		//oss << " $t0, $t0, $t1\n";
 	// }//??????????????????????????????????????
 	// else
 	// {
@@ -698,7 +851,7 @@ void remove_pair(char op)
 
 		make_line_asm(&op2, "$t", 0);
 		make_line_asm(&op1, "$t", 1);
-		make_op_asm(&op2, &op1, op);
+		make_op_asm(op, INT_32, 0, 1);
 		//make_store_asm(&gEl);
 		make_store_asm("$t", 0, gEl.info.name);
 		//make_store_asm("$t", 0, gEl.value);
