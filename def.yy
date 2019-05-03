@@ -55,7 +55,7 @@ vector<string> textSegment;
 vector<string> dataSegment;
 
 static int var_num = 0;
-//static int for_num = 0;
+static int for_num = 0;
 static int etiq_num = 0;
 int last_op = 0;
 int else_op = 0;
@@ -65,7 +65,7 @@ void generate_mips_asm(stack_pair *op1, stack_pair *op2, char op);
 void make_line_asm(stack_pair *, string, int);
 void load_addr_asm(stack_pair *, int);
 void make_conv_asm(stack_pair *, int);
-void make_op_asm(char, int, int, int);
+void make_op_asm(char, int, string, string, int, int);
 void make_store_asm(string, int, string);
 
 void write_textseg();
@@ -81,6 +81,9 @@ void gen_syscall(int, string);
 void make_for_begin_asm(string, int);
 void make_for_expr_asm();
 
+void make_arr_access_asm(string);
+void write_to_index_asm();
+
 stack_pair gEl;
 string gStringEl;
 
@@ -95,7 +98,7 @@ double dval;};
 %token <text> STR_LITERAL
 %token IF ELSE PUSHHEAP WHILE STRING FOR
 %token LEQ EQ NEQ GEQ
-%token INT_32 FLOAT_32 CSTR 
+%token INT_32 FLOAT_32 CSTR ARR ADDR
 %token SPEAKI SPEAKF SPEAKS SCANI SCANF
 %%
 multistmt
@@ -108,81 +111,141 @@ stmt
 	| if_expr				{}
 	| type ';'				{/*dataSegmentSymbols.insert(pair<string, int>(gStringEl, INT_32));*/;}
 	| for_expr
+	| arr_decl ';'
+	| arr_assign ';'
+	//| arr_expr ';'//is it necessary?
+	//| expr ';' {gStack.pop();}
 	//| type assign ';'
 	;
 type
-	: INT_32 IDENTIFER							{
-													/*cout << "$2 = " << $2 << "\n";*/
-													gEl.info.name = $2; gEl.info.value = "0";
-													gEl.info.size = 1; gEl.info.type = INT_32;
-													gEl.token = IDENTIFER;
-													store_global(gEl);
-													/*dataSegmentSymbols.insert(pair<string, int>($2, INT_32));*/
-												}
-	| FLOAT_32 IDENTIFER						{	
-													gEl.info.name = $2; gEl.info.value = "0.0";
-													gEl.info.size = 1; gEl.info.type = FLOAT_32;
-													gEl.token = IDENTIFER;
-													store_global(gEl);
-													/*dataSegmentSymbols.insert(pair<string, int>($2, FLOAT_32));*/
-												}
-	| CSTR IDENTIFER '=' STR_LITERAL			{
-													gEl.info.name = $2; gEl.info.value = $4;
-													gEl.info.size = 1; gEl.info.type = CSTR;
-													gEl.token = IDENTIFER;
+	: INT_32 IDENTIFER
+		{
+			/*cout << "$2 = " << $2 << "\n";*/
+			gEl.info.name = $2; gEl.info.value = "0";
+			gEl.info.size = 1; gEl.info.type = INT_32;
+			gEl.token = IDENTIFER;
+			store_global(gEl);
+			/*dataSegmentSymbols.insert(pair<string, int>($2, INT_32));*/
+		}
+	| FLOAT_32 IDENTIFER
+		{	
+			gEl.info.name = $2; gEl.info.value = "0.0";
+			gEl.info.size = 1; gEl.info.type = FLOAT_32;
+			gEl.token = IDENTIFER;
+			store_global(gEl);
+			/*dataSegmentSymbols.insert(pair<string, int>($2, FLOAT_32));*/
+		}
+	| CSTR IDENTIFER '=' STR_LITERAL
+		{
+			gEl.info.name = $2; gEl.info.value = $4;
+			gEl.info.size = 1; gEl.info.type = CSTR;
+			gEl.token = IDENTIFER;
 
-													store_global(gEl);
-													/*gEl.value = $2;
-													gEl.token = IDENTIFER;
-													gStack.push(gEl);*/
-												}
+			store_global(gEl);
+			/*gEl.value = $2;
+			gEl.token = IDENTIFER;
+			gStack.push(gEl);*/
+		}
 	;
 assign
-	: IDENTIFER '=' expr	{fprintf(dropfile, "%s = ", $1);
-							gEl.info.name = $1; gEl.token = IDENTIFER;
-							gStack.push(gEl);
-							remove_pair('=');}
+	: IDENTIFER '=' expr
+		{
+			fprintf(dropfile, "%s = ", $1);
+			gEl.info.name = $1; gEl.token = IDENTIFER;
+			gStack.push(gEl);
+			remove_pair('=');
+		}
+	;
+arr_assign
+	: arr_expr '=' expr
+		{
+			write_to_index_asm();
+			/*gEl = gStack.top();
+			gStack.pop();
+			make_line_asm(&gEl, "$t", 0);
+
+			make_store_asm("$t", 0, "($t6)");//array ought to be in t6*/
+		}
+	;
+arr_decl
+	: INT_32 IDENTIFER '[' INTEGER_VAL ']'
+		{
+			gEl.info.name = $2;
+			gEl.info.size = $4;
+			gEl.info.value = "0 : " + to_string(gEl.info.size);
+			gEl.info.type = INT_32;
+			gEl.token = ARR;
+			store_global(gEl);
+		}
+	| FLOAT_32 IDENTIFER '[' INTEGER_VAL ']'
+	;
+arr_expr
+	: IDENTIFER '[' expr ']' 
+		{
+			make_arr_access_asm($1);
+			/*gEl = gStack.top();//index if expr type ~= int...
+			gStack.pop();
+
+			stack_pair arr;
+			find_dataseg_item($1, &arr);
+
+
+			textSegment.push_back("#" + arr.info.name +
+									'[' + gEl.info.value + "]\n");
+			make_line_asm(&gEl, "$t", 7);//index
+			make_line_asm(&arr, "$t", 6);//array
+
+			textSegment.push_back("#generate addr(32bits) offset\n");
+			make_op_asm('*', INT_32, "$t", "", 7, 4);
+
+			//move address relative to array
+
+			textSegment.push_back("#Move addr by offset\n");			
+			make_op_asm('+', INT_32, "$t", "$t", 6, 7);*/
+		}
 	;
 if_expr
-	: if_begin '{' multistmt '}'			{
-												string res = gEtiqStack.top() + ":\n";
-												gEtiqStack.pop();
-												textSegment.push_back(res);//last label
-											}
-	| if_begin '{' multistmt '}' else_expr	{
-												string res = gEtiqStack.top() + ":\n";
-												gEtiqStack.pop();
-												textSegment.push_back(res);//last label
+	: if_begin '{' multistmt '}'
+		{
+			string res = gEtiqStack.top() + ":\n";
+			gEtiqStack.pop();
+			textSegment.push_back(res);//last label
+		}
+	| if_begin '{' multistmt '}' else_expr
+		{
+			string res = gEtiqStack.top() + ":\n";
+			gEtiqStack.pop();
+			textSegment.push_back(res);//last label
 
-												
-											}
+			
+		}
 	;
 else_expr
-	: else_begin '{' multistmt '}'		{
-											
-											// string res = gEtiqStack.top() + ":\n";
-											// gEtiqStack.pop();
-											// textSegment.push_back(res);
-										}
+	: else_begin '{' multistmt '}'
+		{										
+			// string res = gEtiqStack.top() + ":\n";
+			// gEtiqStack.pop();
+			// textSegment.push_back(res);
+		}
 	;
 for_expr
 	: for_begin '{' multistmt '}'
-									{
-										make_for_expr_asm();
-									}
+		{
+			make_for_expr_asm();
+		}
 	|	for_begin '{' '}'
-									{
-										make_for_expr_asm();
-										// string lastlbl = gEtiqStack.top();
-										// gEtiqStack.pop();
+		{
+			make_for_expr_asm();
+			// string lastlbl = gEtiqStack.top();
+			// gEtiqStack.pop();
 
-										// string firstlbl = gEtiqStack.top();
-										// gEtiqStack.pop();
+			// string firstlbl = gEtiqStack.top();
+			// gEtiqStack.pop();
 
-										// make_uncond_jmp_asm(firstlbl);
+			// make_uncond_jmp_asm(firstlbl);
 
-										// textSegment.push_back(lastlbl + ":\n");//last label
-									}
+			// textSegment.push_back(lastlbl + ":\n");//last label
+		}
 	;
 else_begin
 	: ELSE
@@ -200,43 +263,44 @@ else_begin
 		}
 	;
 if_begin
-	: IF '(' cond_expr ')'	{
-								string lbl = "LBL" + to_string(etiq_num);
-								make_cond_jmp_asm(last_op, lbl, 0, 1);
-								gEtiqStack.push(lbl);
-								etiq_num++;
-							}
+	: IF '(' cond_expr ')'
+		{
+			string lbl = "LBL" + to_string(etiq_num);
+			make_cond_jmp_asm(last_op, lbl, 0, 1);
+			gEtiqStack.push(lbl);
+			etiq_num++;
+		}
 	;
 for_begin
 	: FOR '(' IDENTIFER ';' cond_expr ';' INTEGER_VAL ')'
-							{
-								make_for_begin_asm($3, $7);
+		{
+			make_for_begin_asm($3, $7);
 
-								// string firstlbl = "LBL" + to_string(etiq_num);
-								// etiq_num++;
-								// gEtiqStack.push(firstlbl);
+			// string firstlbl = "LBL" + to_string(etiq_num);
+			// etiq_num++;
+			// gEtiqStack.push(firstlbl);
 
-								// string lastlbl = "LBL" + to_string(etiq_num);
-								// etiq_num++;
-								// gEtiqStack.push(lastlbl);
+			// string lastlbl = "LBL" + to_string(etiq_num);
+			// etiq_num++;
+			// gEtiqStack.push(lastlbl);
 
-								// textSegment.push_back(firstlbl + ":\n");//last label
-								
-								// make_cond_jmp_asm(last_op, lastlbl, 4, 5);
+			// textSegment.push_back(firstlbl + ":\n");//last label
+			
+			// make_cond_jmp_asm(last_op, lastlbl, 4, 5);
 
-								// stack_pair el;
-								// find_dataseg_item($3, &el);
-								
-								// gEl.info.value = to_string($7); gEl.token = INTEGER_VAL;
-								// gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+			// stack_pair el;
+			// find_dataseg_item($3, &el);
+			
+			// gEl.info.value = to_string($7); gEl.token = INTEGER_VAL;
+			// gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
 
-								// textSegment.push_back("#it += " + to_string($7) + "\n");
-								// make_line_asm(&el, "$t", 4);
-								// make_line_asm(&gEl, "$t", 5);//substitute magic nr?
-								// make_op_asm('+', INT_32, 4, 5);
-								// make_store_asm("$t", 4, el.info.name);
-								/*this might be bad, icreasing iterator right after jmp*/
-							}
+			// textSegment.push_back("#it += " + to_string($7) + "\n");
+			// make_line_asm(&el, "$t", 4);
+			// make_line_asm(&gEl, "$t", 5);//substitute magic nr?
+			// make_op_asm('+', INT_32, 4, 5);
+			// make_store_asm("$t", 4, el.info.name);
+			/*this might be bad, icreasing iterator right after jmp*/
+		}
 	;
 cond_expr
 	: expr op_logic expr
@@ -267,17 +331,28 @@ op_logic
 	| NEQ					{last_op = NEQ;}
 	;
 factor
-	:IDENTIFER				{fprintf(dropfile, "%s ", $1);
-							gEl.info.name = $1; gEl.token = IDENTIFER; gEl.info.value = ""; gEl.info.size = 0;
-							gStack.push(gEl);}
-	|INTEGER_VAL            {fprintf(dropfile, "%d ", $1);
-							gEl.info.value = to_string($1); gEl.token = INTEGER_VAL;
-							gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
-							gStack.push(gEl);}
-    |DOUBLE_VAL				{fprintf(dropfile, "%f ", $1);
-							gEl.info.value = to_string($1); gEl.token = DOUBLE_VAL;
-							gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = FLOAT_32;
-							gStack.push(gEl);}
+	:IDENTIFER
+		{
+			fprintf(dropfile, "%s ", $1);
+			gEl.info.name = $1; gEl.token = IDENTIFER;
+			gEl.info.value = ""; gEl.info.size = 0;
+			gEl.info.type = ADDR;//it will be decided during assignment
+			gStack.push(gEl);
+		}
+	|INTEGER_VAL
+		{
+			fprintf(dropfile, "%d ", $1);
+			gEl.info.value = to_string($1); gEl.token = INTEGER_VAL;
+			gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+			gStack.push(gEl);
+		}
+    |DOUBLE_VAL
+		{
+			fprintf(dropfile, "%f ", $1);
+			gEl.info.value = to_string($1); gEl.token = DOUBLE_VAL;
+			gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = FLOAT_32;
+			gStack.push(gEl);
+		}
 	|'(' expr ')'			{printf("expression in parentheses\n");}
 	;
 %%
@@ -299,35 +374,71 @@ void write_dataseg()
 	// {
 	// 	fprintf(yyout,"\t%s\n", it.c_str());
 	// }
+	string hold;
 	for (auto const& x : dataSegmentSymbols)
 	{
-		oss << x.first.name <<":\t";
-		switch(x.second)
+		hold = x.first.name + ":\t";
+
+		switch(x.first.type)
 		{
 			case INTEGER_VAL:
+			case INT_32:
 			{
-				oss <<".word\t0\n";
+				hold += ".word\t";
 				break;
 			}
 			case FLOAT_32:
+			case DOUBLE_VAL:
 			{
-				oss <<".float\t0\n";
+				hold += ".float\t";
 				break;
 			}
 			case CSTR:
+			case IDENTIFER:
 			{
-				oss <<".ascii\t0\n";
+				hold += ".asciiz\t";
 				break;
 			}
 			default:
 			{
-				oss <<".word\t0\n";
+				hold += ".word\t";
 				break;
 			}
 		}
-		fprintf(yyout, "\t%s", oss.str().c_str());
-		oss.str("");
-		oss.clear();
+
+		hold += x.first.value + '\n';
+
+		// oss << x.first.name <<":\t";
+		// switch(x.second)
+		// {
+		// 	case INTEGER_VAL:
+		// 	//case ARR:
+		// 	{
+		// 		oss <<".word\t";
+		// 		break;
+		// 	}
+		// 	case FLOAT_32:
+		// 	{
+		// 		oss <<".float\t";
+		// 		break;
+		// 	}
+		// 	case CSTR:
+		// 	{
+		// 		oss <<".ascii\t";
+		// 		break;
+		// 	}
+		// 	default:
+		// 	{
+		// 		oss <<".word\t";
+		// 		break;
+		// 	}
+		// }
+
+		// oss << x.first.value << "\n";
+
+		fprintf(yyout, "\t%s", hold.c_str());
+		// oss.str("");
+		// oss.clear();
 	}
 	// for(map<var_info,int>::iterator it = dataSegmentSymbols.begin();
 	// 	it != dataSegmentSymbols.end(); ++it)
@@ -371,7 +482,7 @@ void find_dataseg_item(string name, stack_pair *res)
 		if(it->first.name == name)
 		{
 			//best way to copy it?
-			res->token = IDENTIFER;
+			res->token = it->second;
 			res->info.name = it->first.name;
 			res->info.size = it->first.size;
 			res->info.value = it->first.value;
@@ -384,9 +495,9 @@ void find_dataseg_item(string name, stack_pair *res)
 
 void store_global(stack_pair el)
 {
-	// cout <<"var_name = " << var_name << "\n";
-	// cout <<"type = " << type << "\n";
-	// cout <<"var_value = " << var_value << "\n";
+	// cout <<"var_name = " << el.info.name << "\n";
+	// cout <<"type = " << el.info.type << "\n";
+	// cout <<"var_value = " << el.info.value << "\n";
 
 	string hold = el.info.name + ":\t";
 
@@ -514,6 +625,7 @@ void gen_syscall(int type, string id)
 //easily modifiable to not change initializing variable
 void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 {
+	//prepare labels for loop
 	string firstlbl = "LBL" + to_string(etiq_num);
 	etiq_num++;
 	gEtiqStack.push(firstlbl);
@@ -522,8 +634,26 @@ void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 	etiq_num++;
 	gEtiqStack.push(lastlbl);
 
-	textSegment.push_back(firstlbl + ":\n");//last label
+	/*
+	//copy content of init value to iterX
+	stack_pair el;
+	find_dataseg_item(begin_stmt_name, &el);
+	el.info.name = "iterator" + to_string(for_num);//not enough
+	for_num++;
+	store_global(el);
+	//cond_expr put those two on stack, and we have to swap begin_stmt_name
 	
+	stack_pair left_op = gStack.top();
+	gStack.pop();
+
+	stack_pair right_op = gStack.top();
+	gStack.pop();//TODO
+	*/
+
+
+	textSegment.push_back(firstlbl + ":\n");//last label
+
+	//check if subsequent iterator values satisfy condition
 	make_cond_jmp_asm(last_op, lastlbl, 4, 5);
 
 	stack_pair el;
@@ -533,9 +663,11 @@ void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 	gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
 
 	textSegment.push_back("#it += " + to_string(iter_increase) + "\n");
+
+	//increase iterator value
 	make_line_asm(&el, "$t", 4);
 	make_line_asm(&gEl, "$t", 5);//substitute magic nr?
-	make_op_asm('+', INT_32, 4, 5);
+	make_op_asm('+', INT_32, "$t", "$t", 4, 5);
 	make_store_asm("$t", 4, el.info.name);
 	/*this might be bad, icreasing iterator right after jmp*/
 }
@@ -568,6 +700,37 @@ void make_uncond_jmp_asm(string label)
 	//gEtiqStack.push(label);
 }
 
+void write_to_index_asm()
+{
+	gEl = gStack.top();
+	gStack.pop();
+	make_line_asm(&gEl, "$t", 0);
+	make_store_asm("$t", 0, "($t6)");//array ought to be in t6
+}
+
+void make_arr_access_asm(string arr_name)
+{
+	gEl = gStack.top();//index if expr type ~= int...
+	gStack.pop();
+
+	stack_pair arr;
+	find_dataseg_item(arr_name, &arr);
+
+
+	textSegment.push_back("#" + arr.info.name +
+							'[' + gEl.info.value + "]\n");
+	make_line_asm(&gEl, "$t", 7);//index
+	make_line_asm(&arr, "$t", 6);//array
+
+	textSegment.push_back("#generate addr(32bits) offset\n");
+	make_op_asm('*', INT_32, "$t", "", 7, 4);
+
+	//move address relative to array
+
+	textSegment.push_back("#Move addr by offset\n");			
+	make_op_asm('+', INT_32, "$t", "$t", 6, 7);
+}
+
 void load_addr_asm(stack_pair *arg, int nr)
 {
 	ostringstream oss;
@@ -587,32 +750,32 @@ void make_cond_jmp_asm(int condition, string label, int rgstr1, int rgstr2)
 	//beq, bne, blt, ble, bgt, bge
 	switch(condition)
 	{
-		case EQ://!=
+		case EQ://== -> !=
 			oss << "==" << " ";
 			op_cond = "bne";
 		break;
 
-		case NEQ://==
+		case NEQ://!= -> ==
 			oss << "!=" << " ";
 			op_cond = "beq";
 		break;
 
-		case '<'://>=
+		case '<'://< -> >=
 			oss << "<" << " ";
-			op_cond = "bgt";
+			op_cond = "bge";
 		break;
 
-		case GEQ://<
+		case GEQ://>= -> <
 			oss << ">=" << " ";
 			op_cond = "blt";
 		break;
 
-		case '>'://<=
+		case '>'://> -> <=
 			oss << ">" << " ";
 			op_cond = "ble";
 		break;
 
-		case LEQ://>
+		case LEQ://<= -> >
 			oss << "<=" << " ";
 			op_cond = "bgt";
 		break;
@@ -666,20 +829,24 @@ void make_line_asm(stack_pair *arg, string rgstr, int nr)
 	ostringstream oss;
 	switch(arg->token)
 	{
+		case INT_32:
 		case INTEGER_VAL:
 		{
 			oss << "li "<< rgstr << to_string(nr) << ", "<< arg->info.value << "\n";
 		}
 		break;
 		case IDENTIFER:
+		case ADDR:
 		{
 			oss << "lw "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
 		}
 		break;
+		case FLOAT_32:
 		case DOUBLE_VAL:
 		{
 			oss << "l.s "<< rgstr << to_string(nr) << ", "<< arg->info.value << "\n";
 		}
+		case ARR:
 		case CSTR:
 		{
 			oss << "la "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
@@ -695,10 +862,11 @@ void make_conv_asm(stack_pair *arg, int type)
 
 }
 
-void make_op_asm(char op, int type, int nr_to, int nr_sec)
+void make_op_asm(char op, int type, string rgstr_to, string rgstr_sec, int nr_to, int nr_sec)
 {
+	//consider using stack element
 	ostringstream oss;
-	string rgstr = ((type == INT_32) ? "$t" : "$f"); 
+	//string rgstr = ((type == INT_32) ? "$t" : "$f");
 	switch(op)
 	{
 		case '+':
@@ -734,9 +902,9 @@ void make_op_asm(char op, int type, int nr_to, int nr_sec)
 	// else if(left->token == IDENTIFER && right->token == INTEGER_VAL ||
 	// 		left->token == INTEGER_VAL && right->token == IDENTIFER)
 	// {
-		oss << " "  << rgstr << to_string(nr_to) << ", "
-					<< rgstr << to_string(nr_to) << ", "
-					<< rgstr << to_string(nr_sec) << "\n";
+		oss << " "  << rgstr_to << to_string(nr_to) << ", "
+					<< rgstr_to << to_string(nr_to) << ", "
+					<< rgstr_sec << to_string(nr_sec) << "\n";
 
 		//oss << " $t0, $t0, $t1\n";
 	// }//??????????????????????????????????????
@@ -827,9 +995,6 @@ void remove_pair(char op)
 
 	oss << " " << op << "\n";
 	textSegment.push_back(oss.str());
-	// cout << "op1 name = "	<< op1.info.name	<< '\n'
-	// 	 << "op1 value = "	<< op1.info.value	<< "\n";
-	//cout << oss.str() << endl;
 	oss.str("");
 	oss.clear();
 
@@ -838,20 +1003,18 @@ void remove_pair(char op)
 	if(op != '=')
 	{
 		oss << "retval_" << var_num;
-		//gEl.value = oss.str();
 		gEl.info.value = "0";
 		gEl.info.name = oss.str();
 		gEl.info.size = 1;
 		gEl.info.type = INT_32;
 		gEl.token = IDENTIFER;
-		//dataSegmentSymbols.insert(pair<string, int>(oss.str(), INTEGER_VAL));//wynika z op1 i op2
 		store_global(gEl);
 		gStack.push(gEl);
 		var_num++;
 
 		make_line_asm(&op2, "$t", 0);
 		make_line_asm(&op1, "$t", 1);
-		make_op_asm(op, INT_32, 0, 1);
+		make_op_asm(op, INT_32, "$t", "$t", 0, 1);
 		//make_store_asm(&gEl);
 		make_store_asm("$t", 0, gEl.info.name);
 		//make_store_asm("$t", 0, gEl.value);
@@ -862,8 +1025,6 @@ void remove_pair(char op)
 		make_line_asm(&op2, "$t", 0);
 		//make_store_asm(&op1);
 		make_store_asm("$t", 0, op1.info.name);
-		
-		//dataSegmentSymbols.insert(pair<string, int>(op1.value, IDENTIFER));//przeniesc instrukcje do miejsca deklaracji
 	}
 }
 
@@ -893,8 +1054,6 @@ int main(int argc, char **argv)
     {
         return -1;
     }
-
-	
 
     yyparse();
 	//fprint(yyout, "\t.data");
