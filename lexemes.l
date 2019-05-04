@@ -43,7 +43,7 @@ int yyerror(const char *msg,...);
 "scani"							{return SCANI;};
 "scanf"							{return SCANF;};
 
-([1-9][0-9]*|0)\.[0-9]+			{printf("float "); yylval.dval = atoi(yytext);return DOUBLE_VAL;};
+([1-9][0-9]*|0)\.[0-9]+			{printf("float "); yylval.dval = atof(yytext);return DOUBLE_VAL;};
 [1-9][0-9]*|0					{printf("integer "); yylval.ival = atoi(yytext);return INTEGER_VAL;}	
 [_a-zA-Z][_a-zA-Z0-9]*			{printf("nazwa "); yylval.text = strdup(yytext);return IDENTIFER;}
 \"(.*?)\"						{printf("string_literal"); yylval.text = strdup(yytext);return STR_LITERAL;}

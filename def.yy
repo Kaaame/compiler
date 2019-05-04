@@ -25,13 +25,52 @@ using namespace std;
 
 //struct var_info;
 
+enum register_num
+{
+	$t0,$t1,
+	$t2,$t3,
+	$t4,$t5,
+	$t6,$t7,
+
+	$a0,$a1,
+	$a2,$a3,
+
+	$v0,$v1,
+	
+	$f0,$f1,
+	$f2,$f3,
+	$f4,$f5,
+	$f6,$f7,
+	REGISTER_NUM_SIZE
+};
+
+static int register_taken[REGISTER_NUM_SIZE] = {};
+
+static map<register_num, string> register_names
+{
+	{$t0, "$t0"},{$t1, "$t1"},
+	{$t2, "$t2"},{$t3, "$t3"},
+	{$t4, "$t4"},{$t5, "$t5"},
+	{$t6, "$t6"},{$t7, "$t7"},
+
+	{$a0, "$a0"},{$a1, "$a1"},
+	{$a3, "$a3"},{$a3, "$a3"},
+
+	{$v0, "$v0"},{$v1, "$v1"},
+	
+	{$f0, "$f0"},{$f1, "$f1"},
+	{$f2, "$f2"},{$f3, "$f3"},
+	{$f4, "$f4"},{$f5, "$f5"},
+	{$f6, "$f6"},{$f7, "$f7"}
+};
+
 struct var_info
 {
 	int size;
 	int type;
 	string value;
 	string name;
-	//int register?
+	int register_val;
 	//overloading lt op, so we can use this struct as key in dataSegmentSymbols
 	bool operator< (const var_info& el) const
 	{
@@ -57,8 +96,9 @@ vector<string> dataSegment;
 static int var_num = 0;
 static int for_num = 0;
 static int etiq_num = 0;
-int last_op = 0;
-int else_op = 0;
+static int float_num = 0;
+static int last_op = 0;
+static int else_op = 0;
 
 void remove_pair(char op);
 void generate_mips_asm(stack_pair *op1, stack_pair *op2, char op);
@@ -83,6 +123,9 @@ void make_for_expr_asm();
 
 void make_arr_access_asm(string);
 void write_to_index_asm();
+
+string assign_free_register(int);
+void free_register(stack_pair);
 
 stack_pair gEl;
 string gStringEl;
@@ -113,6 +156,7 @@ stmt
 	| for_expr
 	| arr_decl ';'
 	| arr_assign ';'
+	| DOUBLE_VAL ';'
 	//| arr_expr ';'//is it necessary?
 	//| expr ';' {gStack.pop();}
 	//| type assign ';'
@@ -120,20 +164,17 @@ stmt
 type
 	: INT_32 IDENTIFER
 		{
-			/*cout << "$2 = " << $2 << "\n";*/
 			gEl.info.name = $2; gEl.info.value = "0";
 			gEl.info.size = 1; gEl.info.type = INT_32;
 			gEl.token = IDENTIFER;
 			store_global(gEl);
-			/*dataSegmentSymbols.insert(pair<string, int>($2, INT_32));*/
 		}
-	| FLOAT_32 IDENTIFER
-		{	
+	| FLOAT_32 IDENTIFER //'=' DOUBLE_VAL
+		{	//tu cos zrobic
 			gEl.info.name = $2; gEl.info.value = "0.0";
 			gEl.info.size = 1; gEl.info.type = FLOAT_32;
 			gEl.token = IDENTIFER;
 			store_global(gEl);
-			/*dataSegmentSymbols.insert(pair<string, int>($2, FLOAT_32));*/
 		}
 	| CSTR IDENTIFER '=' STR_LITERAL
 		{
@@ -142,9 +183,6 @@ type
 			gEl.token = IDENTIFER;
 
 			store_global(gEl);
-			/*gEl.value = $2;
-			gEl.token = IDENTIFER;
-			gStack.push(gEl);*/
 		}
 	;
 assign
@@ -160,11 +198,7 @@ arr_assign
 	: arr_expr '=' expr
 		{
 			write_to_index_asm();
-			/*gEl = gStack.top();
-			gStack.pop();
-			make_line_asm(&gEl, "$t", 0);
 
-			make_store_asm("$t", 0, "($t6)");//array ought to be in t6*/
 		}
 	;
 arr_decl
@@ -183,25 +217,6 @@ arr_expr
 	: IDENTIFER '[' expr ']' 
 		{
 			make_arr_access_asm($1);
-			/*gEl = gStack.top();//index if expr type ~= int...
-			gStack.pop();
-
-			stack_pair arr;
-			find_dataseg_item($1, &arr);
-
-
-			textSegment.push_back("#" + arr.info.name +
-									'[' + gEl.info.value + "]\n");
-			make_line_asm(&gEl, "$t", 7);//index
-			make_line_asm(&arr, "$t", 6);//array
-
-			textSegment.push_back("#generate addr(32bits) offset\n");
-			make_op_asm('*', INT_32, "$t", "", 7, 4);
-
-			//move address relative to array
-
-			textSegment.push_back("#Move addr by offset\n");			
-			make_op_asm('+', INT_32, "$t", "$t", 6, 7);*/
 		}
 	;
 if_expr
@@ -223,9 +238,6 @@ if_expr
 else_expr
 	: else_begin '{' multistmt '}'
 		{										
-			// string res = gEtiqStack.top() + ":\n";
-			// gEtiqStack.pop();
-			// textSegment.push_back(res);
 		}
 	;
 for_expr
@@ -236,15 +248,6 @@ for_expr
 	|	for_begin '{' '}'
 		{
 			make_for_expr_asm();
-			// string lastlbl = gEtiqStack.top();
-			// gEtiqStack.pop();
-
-			// string firstlbl = gEtiqStack.top();
-			// gEtiqStack.pop();
-
-			// make_uncond_jmp_asm(firstlbl);
-
-			// textSegment.push_back(lastlbl + ":\n");//last label
 		}
 	;
 else_begin
@@ -275,31 +278,6 @@ for_begin
 	: FOR '(' IDENTIFER ';' cond_expr ';' INTEGER_VAL ')'
 		{
 			make_for_begin_asm($3, $7);
-
-			// string firstlbl = "LBL" + to_string(etiq_num);
-			// etiq_num++;
-			// gEtiqStack.push(firstlbl);
-
-			// string lastlbl = "LBL" + to_string(etiq_num);
-			// etiq_num++;
-			// gEtiqStack.push(lastlbl);
-
-			// textSegment.push_back(firstlbl + ":\n");//last label
-			
-			// make_cond_jmp_asm(last_op, lastlbl, 4, 5);
-
-			// stack_pair el;
-			// find_dataseg_item($3, &el);
-			
-			// gEl.info.value = to_string($7); gEl.token = INTEGER_VAL;
-			// gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
-
-			// textSegment.push_back("#it += " + to_string($7) + "\n");
-			// make_line_asm(&el, "$t", 4);
-			// make_line_asm(&gEl, "$t", 5);//substitute magic nr?
-			// make_op_asm('+', INT_32, 4, 5);
-			// make_store_asm("$t", 4, el.info.name);
-			/*this might be bad, icreasing iterator right after jmp*/
 		}
 	;
 cond_expr
@@ -349,9 +327,13 @@ factor
     |DOUBLE_VAL
 		{
 			fprintf(dropfile, "%f ", $1);
-			gEl.info.value = to_string($1); gEl.token = DOUBLE_VAL;
-			gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = FLOAT_32;
+			//cout << $1;
+			gEl.info.value = to_string($1); gEl.token = IDENTIFER;
+			gEl.info.name = "float_" + to_string(float_num);
+			gEl.info.size = 0; gEl.info.type = DOUBLE_VAL;
+			store_global(gEl);
 			gStack.push(gEl);
+			float_num++;
 		}
 	|'(' expr ')'			{printf("expression in parentheses\n");}
 	;
@@ -370,10 +352,6 @@ void write_dataseg()
 {
 	ostringstream oss;
 	fprintf(yyout, ".data\n");
-	// for(const auto &it : dataSegment)
-	// {
-	// 	fprintf(yyout,"\t%s\n", it.c_str());
-	// }
 	string hold;
 	for (auto const& x : dataSegmentSymbols)
 	{
@@ -408,70 +386,11 @@ void write_dataseg()
 
 		hold += x.first.value + '\n';
 
-		// oss << x.first.name <<":\t";
-		// switch(x.second)
-		// {
-		// 	case INTEGER_VAL:
-		// 	//case ARR:
-		// 	{
-		// 		oss <<".word\t";
-		// 		break;
-		// 	}
-		// 	case FLOAT_32:
-		// 	{
-		// 		oss <<".float\t";
-		// 		break;
-		// 	}
-		// 	case CSTR:
-		// 	{
-		// 		oss <<".ascii\t";
-		// 		break;
-		// 	}
-		// 	default:
-		// 	{
-		// 		oss <<".word\t";
-		// 		break;
-		// 	}
-		// }
-
-		// oss << x.first.value << "\n";
+		
 
 		fprintf(yyout, "\t%s", hold.c_str());
-		// oss.str("");
-		// oss.clear();
+		
 	}
-	// for(map<var_info,int>::iterator it = dataSegmentSymbols.begin();
-	// 	it != dataSegmentSymbols.end(); ++it)
-	// {
-	// 	auto name = it->first;
-	// 	oss << name.name <<":\t";
-	// 	switch(it->second)
-	// 	{
-	// 		case INTEGER_VAL:
-	// 		{
-	// 			oss <<".word\t0\n";
-	// 			break;
-	// 		}
-	// 		case FLOAT_32:
-	// 		{
-	// 			oss <<".float\t0\n";
-	// 			break;
-	// 		}
-	// 		case CSTR:
-	// 		{
-	// 			oss <<".ascii\t0\n";
-	// 			break;
-	// 		}
-	// 		default:
-	// 		{
-	// 			oss <<".word\t0\n";
-	// 			break;
-	// 		}
-	// 	}
-	// 	fprintf(yyout, "\t%s", oss.str().c_str());
-	// 	oss.str("");
-	// 	oss.clear();
-	// }
 }
 
 void find_dataseg_item(string name, stack_pair *res)
@@ -570,9 +489,6 @@ void gen_syscall(int type, string id)
 		break;		
 	}
 
-	//op1 = gStack.top();
-	//gStack.pop();
-	//op1.token = type;
 	op1.info.name = id;
 
 	oss << op1.info.name << ")\n";
@@ -838,7 +754,10 @@ void make_line_asm(stack_pair *arg, string rgstr, int nr)
 		case IDENTIFER:
 		case ADDR:
 		{
-			oss << "lw "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
+			if(arg->info.type != DOUBLE_VAL)
+				oss << "lw "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
+			else
+				oss << "l.s "<< rgstr << to_string(nr) << ", "<< arg->info.name << "\n";
 		}
 		break;
 		case FLOAT_32:
@@ -846,6 +765,7 @@ void make_line_asm(stack_pair *arg, string rgstr, int nr)
 		{
 			oss << "l.s "<< rgstr << to_string(nr) << ", "<< arg->info.value << "\n";
 		}
+		break;
 		case ARR:
 		case CSTR:
 		{
