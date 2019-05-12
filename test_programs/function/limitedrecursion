@@ -1,0 +1,26 @@
+i32 i;
+i = 0;
+i32 max;
+max = 20;
+
+null recr()
+{
+	if(i < max)
+	{
+		i = i + 1;
+		call print;
+		call recr;
+	}
+}
+
+null print()
+{
+	cstr comm = "Im here\t";
+	cstr newline = "\n";
+	speaks(comm);
+	speaki(i);
+	speaks(newline);
+}
+call recr;
+cstr last = "ride is over!";
+speaks(last);

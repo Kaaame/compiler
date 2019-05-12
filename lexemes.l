@@ -40,6 +40,7 @@ int yyerror(const char *msg,...);
 "str"							{printf("STRING\n"); return STRING;};
 "null"							{printf("STRING\n"); return NFUNC;};
 "call"							{printf("STRING\n"); return CFUNC;};
+"local"							{printf("STRING\n"); return LOCAL_V;};
 "speaki"						{return SPEAKI;}
 "speakf"						{return SPEAKF;}
 "speaks"						{return SPEAKS;}

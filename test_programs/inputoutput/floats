@@ -1,0 +1,7 @@
+f32 a;
+
+a = 10.0666
+
+speakf(a);
+scanf(a);
+speakf(a);

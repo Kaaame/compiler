@@ -1,0 +1,18 @@
+null print()
+{
+	cstr error = "Error, you shouldn't be able to do that!";
+	speaks(error);
+}
+
+i32 a;
+a = 10;
+i32 i;
+i = 0;
+for(i; i < 10; 1)
+{
+	if(i == 3)
+	{
+		call print;
+		a = 20;
+	}
+}

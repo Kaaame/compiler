@@ -42,6 +42,7 @@ enum register_num
 	$f4,$f5,
 	$f6,$f7,
 	$f12,
+	$sp,
 	INVALID_REGISTER
 };
 
@@ -61,7 +62,7 @@ static map<register_num, string> register_names
 	{$f2, "$f2"},{$f3, "$f3"},
 	{$f4, "$f4"},{$f5, "$f5"},//temporary float register
 	{$f6, "$f6"},{$f7, "$f7"},
-	{$f12, "$f12"}
+	{$f12, "$f12"}, {$sp, "$sp"}
 };
 
 struct arr_info
@@ -159,7 +160,7 @@ double dval;};
 %token LEQ EQ NEQ GEQ
 %token INT_32 FLOAT_32 CSTR ARR ADDR FUNCTION
 %token SPEAKI SPEAKF SPEAKS SCANI SCANF
-%token NFUNC CFUNC
+%token NFUNC CFUNC LOCAL_V
 %%
 multistmt
 	: multistmt stmt		{printf("multistmt\n");}
@@ -179,20 +180,24 @@ function_call
 	: CFUNC IDENTIFER
 		{
 			writeSegment->push_back("jal " + string($2) + "\n");
+			writeSegment->push_back("lw $ra, 0($sp)\n");
+			make_op_asm('+', INT_32, (register_num)23, (register_num)23, 4);
 		}
 	;
 function_expr
 	: function_begin '{' multistmt '}'
 		{
 			writeSegment->push_back("jr $ra\n");
-			writeSegment->push_back("#end of function");
+			writeSegment->push_back("#end of function\n");
 			writeSegment = &textSegment;
 		}
 	| function_begin '{' '}'
 		{
+			
 			writeSegment->push_back("jr $ra\n");
-			writeSegment->push_back("#end of function");
+			writeSegment->push_back("#end of function\n");
 			writeSegment = &textSegment;
+			
 		}
 	;
 function_begin
@@ -200,6 +205,9 @@ function_begin
 		{
 			writeSegment = &functionSegment;
 			writeSegment->push_back("#function " + string($2) + "\n");
+			writeSegment->push_back(string($2) + ":\n");
+			make_op_asm('-', INT_32, (register_num)23, (register_num)23, 4);
+			writeSegment->push_back("sw $ra, 0($sp)");
 		}
 	;
 type

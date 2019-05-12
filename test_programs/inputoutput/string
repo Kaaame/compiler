@@ -1,0 +1,3 @@
+cstr string = "Hej ho, hej ho";
+
+speaks(string);
