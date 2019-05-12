@@ -101,8 +101,11 @@ stack<string> gEtiqStack;
 vector<stack_pair> gArrAccess;
 
 map<var_info, int> dataSegmentSymbols;
+
+vector<string> functionSegment;
 vector<string> textSegment;
 vector<string> dataSegment;
+vector<string> *writeSegment = &textSegment;
 
 static int var_num = 0;
 static int float_var_num = 0;
@@ -113,7 +116,6 @@ static int last_op = 0;
 static int else_op = 0;
 
 void remove_pair(char op);
-void generate_mips_asm(stack_pair *op1, stack_pair *op2, char op);
 void make_line_asm(stack_pair *, register_num);
 void load_addr_asm(stack_pair *, register_num);
 register_num make_conv_asm(stack_pair *, register_num);
@@ -155,8 +157,9 @@ double dval;};
 %token <text> STR_LITERAL
 %token IF ELSE PUSHHEAP WHILE STRING FOR
 %token LEQ EQ NEQ GEQ
-%token INT_32 FLOAT_32 CSTR ARR ADDR
+%token INT_32 FLOAT_32 CSTR ARR ADDR FUNCTION
 %token SPEAKI SPEAKF SPEAKS SCANI SCANF
+%token NFUNC CFUNC
 %%
 multistmt
 	: multistmt stmt		{printf("multistmt\n");}
@@ -169,6 +172,35 @@ stmt
 	| type ';'				{/*dataSegmentSymbols.insert(pair<string, int>(gStringEl, INT_32));*/;}
 	| for_expr
 	| arr_decl ';'
+	| function_expr
+	| function_call ';'
+	;
+function_call
+	: CFUNC IDENTIFER
+		{
+			writeSegment->push_back("jal " + string($2) + "\n");
+		}
+	;
+function_expr
+	: function_begin '{' multistmt '}'
+		{
+			writeSegment->push_back("jr $ra\n");
+			writeSegment->push_back("#end of function");
+			writeSegment = &textSegment;
+		}
+	| function_begin '{' '}'
+		{
+			writeSegment->push_back("jr $ra\n");
+			writeSegment->push_back("#end of function");
+			writeSegment = &textSegment;
+		}
+	;
+function_begin
+	: NFUNC IDENTIFER '('')'
+		{
+			writeSegment = &functionSegment;
+			writeSegment->push_back("#function " + string($2) + "\n");
+		}
 	;
 type
 	: INT_32 IDENTIFER
@@ -206,6 +238,22 @@ assign
 		}
 	| IDENTIFER '=' arr_access
 		{
+			find_dataseg_item($1, &gEl);
+
+			stack_pair arr;
+			arr.info.name = "($t6)"; arr.token = IDENTIFER;//ptr_dereference
+			if(gEl.info.type == INT_32)
+			{
+				arr.info.type = INT_32;
+			}
+			else
+				arr.info.type = FLOAT_32;
+
+			gStack.push(arr);
+			
+			gStack.push(gEl);
+
+			remove_pair('=');
 			gArrAccess.clear();
 		}
 	| arr_access '=' expr
@@ -217,86 +265,49 @@ assign
 
 			arr = gStack.top();
 			gStack.pop();
+			
+			if(gEl.info.type == INT_32)
+			{
+				make_line_asm(&gEl, (register_num)0);
+				make_store_asm((register_num)0, "($t6)", INT_32);//array ought to be in t6
+			}
+			else
+			{
+				make_line_asm(&gEl, (register_num)14);
+				make_store_asm((register_num)14, "($t6)", FLOAT_32);//array ought to be in t6				
+			}
 
-			textSegment.push_back("#" + arr.info.name + " move to address\n");
+			gArrAccess.clear();
+		}
+
+arr_access
+	: IDENTIFER dim_access
+		{
+			stack_pair arr;
+			find_dataseg_item($1, &arr);
+			gStack.push(arr);
+			
+			writeSegment->push_back("#" + arr.info.name + " move to address\n");
 
 			make_line_asm(&arr, (register_num)6);
-			textSegment.push_back("li $t3, 0\n");
+			writeSegment->push_back("li $t3, 0\n");
 			for(int i = 0; i < gArrAccess.size(); i++)
 			{
 				make_line_asm(&gArrAccess[i], (register_num)5);
 				make_op_asm('*', INT_32, (register_num)7, (register_num)5, arr.info.size.sizes[i]);
 				make_op_asm('+', INT_32, (register_num)3, (register_num)3, (register_num)7);
 
-				textSegment.push_back("\n");
+				writeSegment->push_back("\n");
 			}
 			make_op_asm('*', INT_32, (register_num)7, (register_num)3, 4);
-			textSegment.push_back("#Move addr by offset\n");			
+			writeSegment->push_back("#Move addr by offset\n");			
 			make_op_asm('+', INT_32, (register_num)6, (register_num)6, (register_num)7);
-			
-			make_line_asm(&gEl, (register_num)0);
-			make_store_asm((register_num)0, "($t6)", INT_32);//array ought to be in t6
-
-			gArrAccess.clear();
-		}
-	// | IDENTIFER '=' arr_expr
-	// 	{
-	// 		gEl.info.name = "($t6)"; gEl.token = IDENTIFER;//ptr_dereference
-	// 		gStack.push(gEl);
-
-	// 		gEl.info.name = $1; gEl.token = IDENTIFER;
-	// 		gStack.push(gEl);
-	// 		remove_pair('=');
-	// 	}
-	;
-// arr_assign //it works but for one dimensional array
-// 	: arr_expr '=' expr
-// 		{
-// 			write_to_index_asm();
-
-// 		}
-// 	;
-// arr_decl
-// 	: INT_32 IDENTIFER '[' INTEGER_VAL ']'
-// 		{
-// 			gEl.info.name = $2;
-// 			gEl.info.size = $4;
-// 			gEl.info.value = "0 : " + to_string(gEl.info.size);
-// 			gEl.info.type = INT_32;
-// 			gEl.token = ARR;
-// 			store_global(gEl);
-// 		}
-// 	| FLOAT_32 IDENTIFER '[' INTEGER_VAL ']'
-// 	;
-// arr_expr
-// 	: IDENTIFER '[' expr ']' 
-// 		{
-// 			make_arr_access_asm($1);
-// 		}
-// 	;
-arr_access
-	: IDENTIFER dim_access
-		{
-			// for(int i = 0; i < gArrAccess.size(); i++)
-			// {
-			// 	if(gArrAccess[i].token == IDENTIFER)
-			// 		cout << gArrAccess[i].info.name << "\n";
-			// 	else
-			// 		cout << atoi(gArrAccess[i].info.value.c_str()) << "\n";
-			// }
-			// cout << "\n";
-			// for(int i = 0; i < gArrSizes.size(); i++)
-			// {
-			// 	cout << gArrSizes[i] << "\t";
-			// }
-			find_dataseg_item($1, &gEl);
-			gStack.push(gEl);
 		}
 	;
 arr_decl
 	: arr_start dim_decl
 		{
-			cout << gEl.info.name << "\n";
+			//cout << gEl.info.name << "\n";
 			int dims = 1;
 			gArrSizes.insert(gArrSizes.begin(), dims);
 			for(int i = gArrDims.size() - 1; i >= 1; i--)
@@ -305,17 +316,6 @@ arr_decl
 				gArrSizes.insert(gArrSizes.begin(), dims);
 				//cout <<"Inserting" << gArrDims[i] << "\t";
 			}
-
-			// cout << "\n";//debug
-			// for(int i = 0; i < gArrDims.size(); i++)
-			// {
-			// 	cout << gArrDims[i] << "\t";
-			// }
-			// cout << "\n";
-			// for(int i = 0; i < gArrSizes.size(); i++)
-			// {
-			// 	cout << gArrSizes[i] << "\t";
-			// }
 
 			if(gArrSizes.size() != gArrDims.size())
 				yyerror("WTF");
@@ -352,11 +352,7 @@ arr_start
 dim_decl
 	: '[' size_const ']'
 		{
-			// for(int i = 0; i < gArrDims.size(); i++)
-			// {
-			// 	cout << gArrDims[i] << "\t";
-			// }
-			// cout << "\n";
+
 		}
 	;
 size_const
@@ -386,13 +382,13 @@ if_expr
 		{
 			string res = gEtiqStack.top() + ":\n";
 			gEtiqStack.pop();
-			textSegment.push_back(res);//last label
+			writeSegment->push_back(res);//last label
 		}
 	| if_begin '{' multistmt '}' else_expr
 		{
 			string res = gEtiqStack.top() + ":\n";
 			gEtiqStack.pop();
-			textSegment.push_back(res);//last label
+			writeSegment->push_back(res);//last label
 
 			
 		}
@@ -424,7 +420,7 @@ else_begin
 			etiq_num++;
 
 			
-			textSegment.push_back(res);//last label
+			writeSegment->push_back(res);//last label
 		}
 	;
 if_begin
@@ -504,6 +500,14 @@ void write_textseg()
 	for(const auto &it : textSegment)
 	{
 		//cout << it;
+		fprintf(yyout,"\t%s", it.c_str());
+	}
+	fprintf(yyout,"\tli $v0, 10\n");
+	fprintf(yyout,"\tsyscall\n");
+	
+
+	for(const auto &it : functionSegment)
+	{
 		fprintf(yyout,"\t%s", it.c_str());
 	}
 }
@@ -653,7 +657,7 @@ void gen_syscall(int type, string id)
 	//op1.info.name = id;
 
 	oss << op1.info.name << ")\n";
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 	//cout << oss.str();
 	oss.str("");
 	oss.clear();
@@ -679,19 +683,19 @@ void gen_syscall(int type, string id)
 	
 	}
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 	oss.str("");
 	oss.clear();
 	if(type == SPEAKI || type == SPEAKF || type == SPEAKS)
 	{
 		make_line_asm(&op1, rgstr);
 		oss << "syscall\n";
-		textSegment.push_back(oss.str());
+		writeSegment->push_back(oss.str());
 	}
 	else
 	{
 		oss << "syscall\n";
-		textSegment.push_back(oss.str());
+		writeSegment->push_back(oss.str());
 		make_store_asm(rgstr, id, op1.info.type);
 	}
 	
@@ -726,7 +730,7 @@ void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 	*/
 
 
-	textSegment.push_back(firstlbl + ":\n");//last label
+	writeSegment->push_back(firstlbl + ":\n");//last label
 
 	//check if subsequent iterator values satisfy condition
 	make_cond_jmp_asm(last_op, lastlbl, $t4, $t5);
@@ -737,7 +741,7 @@ void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 	gEl.info.value = to_string(iter_increase); gEl.token = INTEGER_VAL;
 	gEl.info.name = ""; /*gEl.info.size = NULL*/; gEl.info.type = INT_32;
 
-	textSegment.push_back("#it += " + to_string(iter_increase) + "\n");
+	writeSegment->push_back("#it += " + to_string(iter_increase) + "\n");
 
 	//increase iterator value
 	make_line_asm(&el, $t4);
@@ -757,7 +761,7 @@ void make_for_expr_asm()
 
 	make_uncond_jmp_asm(firstlbl);
 
-	textSegment.push_back(lastlbl + ":\n");//last label
+	writeSegment->push_back(lastlbl + ":\n");//last label
 }
 
 void make_uncond_jmp_asm(string label)
@@ -765,12 +769,12 @@ void make_uncond_jmp_asm(string label)
 	ostringstream oss;
 	oss << "#jump to " << label << "\n";
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 	oss.str("");
 	oss.clear();
 
 	oss << "j " << label << "\n\n";
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 
 	//gEtiqStack.push(label);
 }
@@ -791,17 +795,17 @@ void make_arr_access_asm(string arr_name, vector<int> dims)
 	stack_pair arr;
 	find_dataseg_item(arr_name, &arr);
 
-	textSegment.push_back("#" + arr.info.name +
+	writeSegment->push_back("#" + arr.info.name +
 							'[' + gEl.info.value + "]\n");
 	make_line_asm(&gEl, $t7);//index
 	make_line_asm(&arr, $t6);//array
 
-	textSegment.push_back("#generate addr(32bits) offset\n");
+	writeSegment->push_back("#generate addr(32bits) offset\n");
 	make_op_asm('*', INT_32, $t7, $t7, 4);
 
 	//move address relative to array
 
-	textSegment.push_back("#Move addr by offset\n");			
+	writeSegment->push_back("#Move addr by offset\n");			
 	make_op_asm('+', INT_32, $t6, $t6, $t7);
 
 	//gEl.info.name = "$t6"; gEl.token = INT_32;//gotta have float arrays?
@@ -811,7 +815,7 @@ void load_addr_asm(stack_pair *arg, register_num rgstr)
 {
 	ostringstream oss;
 	oss << "lw " << conv_register_to_string(rgstr) << ", "<< arg->info.name << "\n";
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 }
 
 void make_cond_jmp_asm(int condition, string label, register_num rgstr1, register_num rgstr2)
@@ -885,7 +889,7 @@ void make_cond_jmp_asm(int condition, string label, register_num rgstr1, registe
 
 	oss << "\n";
 	//cout << oss.str();
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 	oss.str("");
 	oss.clear();
 
@@ -895,7 +899,7 @@ void make_cond_jmp_asm(int condition, string label, register_num rgstr1, registe
 					<< ", " << conv_register_to_string(rgstr2)
 					<< ", " << label << "\n";
 	//gEtiqStack.push(label);
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 }
 
 void make_line_asm(stack_pair *arg, register_num rgstr)
@@ -959,7 +963,7 @@ void make_line_asm(stack_pair *arg, register_num rgstr)
 		break;
 	}
 	//cout << oss.str() << endl;
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 }
 
 register_num make_conv_asm(stack_pair *arg, register_num from)
@@ -976,7 +980,7 @@ register_num make_conv_asm(stack_pair *arg, register_num from)
 	//if(arg->token != IDENTIFER)
 	//arg->info.type = FLOAT_32;
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 
 	return ret_rgstr;
 }
@@ -1020,7 +1024,7 @@ void make_op_asm(char op, int type, register_num rgstr_save,
 					<< to_string(op2) << "\n";
 
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 }
 
 void make_op_asm(char op, int type, register_num rgstr_save,
@@ -1063,7 +1067,7 @@ void make_op_asm(char op, int type, register_num rgstr_save,
 					<< conv_register_to_string(op2) << "\n";
 
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 }
 
 void make_store_asm(register_num from, string to, int type)
@@ -1074,25 +1078,8 @@ void make_store_asm(register_num from, string to, int type)
 	else
 		oss << "s.s " << conv_register_to_string(from) << ", " << to << "\n\n";
 
-	textSegment.push_back(oss.str());
+	writeSegment->push_back(oss.str());
 
-}
-
-void generate_mips_asm(stack_pair *left, stack_pair *right, char op)
-{
-	// make_line_asm(left, 0);
-	// make_line_asm(right, 1);
-	// make_op_asm(left, right, op);
-	// make_store_asm(left);
-
-
-
-	//makelineasm(z1, 0)
-	//optional conversion flaot->int->float
-	//makelineasm(z1, 1)
-	//optional conversion flaot->int->float
-	//makeoperation(z1, z2, op)
-	//makestore
 }
 
 void remove_pair(char op)
@@ -1195,7 +1182,7 @@ void remove_pair(char op)
 		}
 		oss << "\n";
 
-		textSegment.push_back(oss.str());
+		writeSegment->push_back(oss.str());
 		oss.str("");
 		oss.clear();
 
@@ -1282,6 +1269,7 @@ void remove_pair(char op)
 
 		if(op1.info.type == FLOAT_32)
 		{
+
 			if(op2.info.type == FLOAT_32)
 			{
 
@@ -1300,7 +1288,7 @@ void remove_pair(char op)
 
 		oss << "\n";
 		
-		textSegment.push_back(oss.str());
+		writeSegment->push_back(oss.str());
 		oss.str("");
 		oss.clear();
 

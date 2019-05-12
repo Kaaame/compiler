@@ -38,6 +38,8 @@ int yyerror(const char *msg,...);
 "while"							{printf("WHILE\n"); return WHILE;};
 "pushheap"						{printf("PUSHHEAP\n"); return PUSHHEAP;};
 "str"							{printf("STRING\n"); return STRING;};
+"null"							{printf("STRING\n"); return NFUNC;};
+"call"							{printf("STRING\n"); return CFUNC;};
 "speaki"						{return SPEAKI;}
 "speakf"						{return SPEAKF;}
 "speaks"						{return SPEAKS;}
