@@ -21,6 +21,7 @@ int yyerror(const char *msg,...);
 \^								{return '^';}
 \=								{return '=';}
 \"								{return '"';}
+\,								{return ',';}
 \<								{return '<';}
 \>								{return '>';}
 \<\=							{return LEQ;}

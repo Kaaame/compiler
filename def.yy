@@ -64,18 +64,28 @@ static map<register_num, string> register_names
 	{$f12, "$f12"}
 };
 
+struct arr_info
+{
+	vector<int> sizes;
+	vector<int> dims;
+};
+
+vector<int> gArrDims;
+vector<int> gArrSizes;
+
 struct var_info
 {
-	int size;
 	int type;
 	string value;
 	string name;
+	arr_info size;
 	register_num register_valE;
 	//overloading lt op, so we can use this struct as key in dataSegmentSymbols
 	bool operator< (const var_info& el) const
 	{
 		return (name.compare(el.name));
 	}
+
 };
 
 
@@ -88,6 +98,7 @@ struct stack_pair
 
 stack<stack_pair> gStack;
 stack<string> gEtiqStack;
+vector<stack_pair> gArrAccess;
 
 map<var_info, int> dataSegmentSymbols;
 vector<string> textSegment;
@@ -158,31 +169,27 @@ stmt
 	| type ';'				{/*dataSegmentSymbols.insert(pair<string, int>(gStringEl, INT_32));*/;}
 	| for_expr
 	| arr_decl ';'
-	| arr_assign ';'
-	| DOUBLE_VAL ';'
-	//| arr_expr ';'//is it necessary?
-	//| expr ';' {gStack.pop();}
-	//| type assign ';'
 	;
 type
 	: INT_32 IDENTIFER
 		{
 			gEl.info.name = $2; gEl.info.value = "0";
-			gEl.info.size = 1; gEl.info.type = INT_32;
+			
+			gEl.info.type = INT_32;
 			gEl.token = IDENTIFER;
 			store_global(gEl);
 		}
 	| FLOAT_32 IDENTIFER //'=' DOUBLE_VAL
 		{	//tu cos zrobic
 			gEl.info.name = $2; gEl.info.value = "0.0";
-			gEl.info.size = 1; gEl.info.type = FLOAT_32;
+			gEl.info.type = FLOAT_32;
 			gEl.token = IDENTIFER;
 			store_global(gEl);
 		}
 	| CSTR IDENTIFER '=' STR_LITERAL
 		{
 			gEl.info.name = $2; gEl.info.value = $4;
-			gEl.info.size = 1; gEl.info.type = CSTR;
+			gEl.info.type = CSTR;
 			gEl.token = IDENTIFER;
 
 			store_global(gEl);
@@ -197,39 +204,181 @@ assign
 			gStack.push(gEl);
 			remove_pair('=');
 		}
-	| IDENTIFER '=' arr_expr
+	| IDENTIFER '=' arr_access
 		{
-			gEl.info.name = "($t6)"; gEl.token = IDENTIFER;//ptr_dereference
-			gStack.push(gEl);
-
-			gEl.info.name = $1; gEl.token = IDENTIFER;
-			gStack.push(gEl);
-			remove_pair('=');
+			gArrAccess.clear();
 		}
-	;
-arr_assign
-	: arr_expr '=' expr
+	| arr_access '=' expr
 		{
-			write_to_index_asm();
+			stack_pair arr;
 
+			gEl = gStack.top();
+			gStack.pop();
+
+			arr = gStack.top();
+			gStack.pop();
+
+			textSegment.push_back("#" + arr.info.name + " move to address\n");
+
+			make_line_asm(&arr, (register_num)6);
+			textSegment.push_back("li $t3, 0\n");
+			for(int i = 0; i < gArrAccess.size(); i++)
+			{
+				make_line_asm(&gArrAccess[i], (register_num)5);
+				make_op_asm('*', INT_32, (register_num)7, (register_num)5, arr.info.size.sizes[i]);
+				make_op_asm('+', INT_32, (register_num)3, (register_num)3, (register_num)7);
+
+				textSegment.push_back("\n");
+			}
+			make_op_asm('*', INT_32, (register_num)7, (register_num)3, 4);
+			textSegment.push_back("#Move addr by offset\n");			
+			make_op_asm('+', INT_32, (register_num)6, (register_num)6, (register_num)7);
+			
+			make_line_asm(&gEl, (register_num)0);
+			make_store_asm((register_num)0, "($t6)", INT_32);//array ought to be in t6
+
+			gArrAccess.clear();
+		}
+	// | IDENTIFER '=' arr_expr
+	// 	{
+	// 		gEl.info.name = "($t6)"; gEl.token = IDENTIFER;//ptr_dereference
+	// 		gStack.push(gEl);
+
+	// 		gEl.info.name = $1; gEl.token = IDENTIFER;
+	// 		gStack.push(gEl);
+	// 		remove_pair('=');
+	// 	}
+	;
+// arr_assign //it works but for one dimensional array
+// 	: arr_expr '=' expr
+// 		{
+// 			write_to_index_asm();
+
+// 		}
+// 	;
+// arr_decl
+// 	: INT_32 IDENTIFER '[' INTEGER_VAL ']'
+// 		{
+// 			gEl.info.name = $2;
+// 			gEl.info.size = $4;
+// 			gEl.info.value = "0 : " + to_string(gEl.info.size);
+// 			gEl.info.type = INT_32;
+// 			gEl.token = ARR;
+// 			store_global(gEl);
+// 		}
+// 	| FLOAT_32 IDENTIFER '[' INTEGER_VAL ']'
+// 	;
+// arr_expr
+// 	: IDENTIFER '[' expr ']' 
+// 		{
+// 			make_arr_access_asm($1);
+// 		}
+// 	;
+arr_access
+	: IDENTIFER dim_access
+		{
+			// for(int i = 0; i < gArrAccess.size(); i++)
+			// {
+			// 	if(gArrAccess[i].token == IDENTIFER)
+			// 		cout << gArrAccess[i].info.name << "\n";
+			// 	else
+			// 		cout << atoi(gArrAccess[i].info.value.c_str()) << "\n";
+			// }
+			// cout << "\n";
+			// for(int i = 0; i < gArrSizes.size(); i++)
+			// {
+			// 	cout << gArrSizes[i] << "\t";
+			// }
+			find_dataseg_item($1, &gEl);
+			gStack.push(gEl);
 		}
 	;
 arr_decl
-	: INT_32 IDENTIFER '[' INTEGER_VAL ']'
+	: arr_start dim_decl
 		{
-			gEl.info.name = $2;
-			gEl.info.size = $4;
-			gEl.info.value = "0 : " + to_string(gEl.info.size);
-			gEl.info.type = INT_32;
-			gEl.token = ARR;
+			cout << gEl.info.name << "\n";
+			int dims = 1;
+			gArrSizes.insert(gArrSizes.begin(), dims);
+			for(int i = gArrDims.size() - 1; i >= 1; i--)
+			{
+				dims *= gArrDims[i];
+				gArrSizes.insert(gArrSizes.begin(), dims);
+				//cout <<"Inserting" << gArrDims[i] << "\t";
+			}
+
+			// cout << "\n";//debug
+			// for(int i = 0; i < gArrDims.size(); i++)
+			// {
+			// 	cout << gArrDims[i] << "\t";
+			// }
+			// cout << "\n";
+			// for(int i = 0; i < gArrSizes.size(); i++)
+			// {
+			// 	cout << gArrSizes[i] << "\t";
+			// }
+
+			if(gArrSizes.size() != gArrDims.size())
+				yyerror("WTF");
+			
+			dims = 0;
+			for(int i = 0; i < gArrSizes.size(); i++)
+			{
+				dims += gArrSizes[i] * gArrDims[i];
+			}
+
+			gEl.info.size.dims = gArrDims;
+			gEl.info.size.sizes = gArrSizes;
+
+			gEl.info.value = "0 : " + to_string(dims);
+
+			gArrDims.clear();
+			gArrSizes.clear();
+
 			store_global(gEl);
 		}
-	| FLOAT_32 IDENTIFER '[' INTEGER_VAL ']'
 	;
-arr_expr
-	: IDENTIFER '[' expr ']' 
+arr_start
+	: INT_32 IDENTIFER
 		{
-			make_arr_access_asm($1);
+			gEl.info.name = $2; gEl.info.type = INT_32;
+			gEl.token = ARR;
+		}
+	| FLOAT_32 IDENTIFER
+		{
+			gEl.info.name = $2; gEl.info.type = FLOAT_32;
+			gEl.token = ARR;
+		}
+	;
+dim_decl
+	: '[' size_const ']'
+		{
+			// for(int i = 0; i < gArrDims.size(); i++)
+			// {
+			// 	cout << gArrDims[i] << "\t";
+			// }
+			// cout << "\n";
+		}
+	;
+size_const
+	: size_const ',' size_value
+	| size_value
+	;
+size_value
+	: INTEGER_VAL	{gArrDims.push_back($1);}
+	;
+dim_access
+	: '[' expr_const ']'
+	;
+expr_const
+	: expr_const ',' expr_value
+	| expr_value
+	;
+expr_value
+	: expr
+		{
+			gEl = gStack.top();
+			gStack.pop();
+			gArrAccess.push_back(gEl);
 		}
 	;
 if_expr
@@ -332,7 +481,7 @@ factor
 		{
 			fprintf(dropfile, "%d ", $1);
 			gEl.info.value = to_string($1); gEl.token = INTEGER_VAL;
-			gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+			gEl.info.name = ""; /*gEl.info.size = NULL*/; gEl.info.type = INT_32;
 			gStack.push(gEl);
 		}
     |DOUBLE_VAL
@@ -341,7 +490,7 @@ factor
 			//cout << $1;
 			gEl.info.value = to_string($1); gEl.token = IDENTIFER;
 			gEl.info.name = "float_" + to_string(float_num);
-			gEl.info.size = 0; gEl.info.type = DOUBLE_VAL;
+			/*gEl.info.size = NULL*/; gEl.info.type = DOUBLE_VAL;
 			store_global(gEl);
 			gStack.push(gEl);
 			float_num++;
@@ -414,6 +563,7 @@ void find_dataseg_item(string name, stack_pair *res)
 			//best way to copy it?
 			res->token = it->second;
 			res->info.name = it->first.name;
+			
 			res->info.size = it->first.size;
 			res->info.value = it->first.value;
 			res->info.type = it->first.type;
@@ -585,7 +735,7 @@ void make_for_begin_asm(string begin_stmt_name, int iter_increase)
 	find_dataseg_item(begin_stmt_name, &el);
 	
 	gEl.info.value = to_string(iter_increase); gEl.token = INTEGER_VAL;
-	gEl.info.name = ""; gEl.info.size = 0; gEl.info.type = INT_32;
+	gEl.info.name = ""; /*gEl.info.size = NULL*/; gEl.info.type = INT_32;
 
 	textSegment.push_back("#it += " + to_string(iter_increase) + "\n");
 
@@ -633,7 +783,7 @@ void write_to_index_asm()
 	make_store_asm($t0, "($t6)", INT_32);//array ought to be in t6
 }
 
-void make_arr_access_asm(string arr_name)
+void make_arr_access_asm(string arr_name, vector<int> dims)
 {
 	gEl = gStack.top();//index if expr type ~= int...
 	gStack.pop();
@@ -1086,7 +1236,7 @@ void remove_pair(char op)
 		oss << tmpval;
 		gEl.info.value = "0";
 		gEl.info.name = oss.str();
-		gEl.info.size = 1;
+		/*gEl.info.size = NULL;*/
 		gEl.info.type = operation_type;
 		gEl.token = IDENTIFER;
 		store_global(gEl);
@@ -1101,6 +1251,11 @@ void remove_pair(char op)
 		op2.info.type == FLOAT_32)
 		{
 			operation_type = FLOAT_32;
+			rgstr0 = $f0;
+		}
+		else
+		{
+			rgstr0 = $t0;
 		}
 
 		oss << "#";
@@ -1124,12 +1279,19 @@ void remove_pair(char op)
 			oss << op1.info.value;
 		}
 
-		
 
-
-		if(op1.info.type == FLOAT_32 && (op2.info.type != FLOAT_32))
+		if(op1.info.type == FLOAT_32)
 		{
-			yyerror("Invalid conversion!");			
+			if(op2.info.type == FLOAT_32)
+			{
+
+			}
+			else if(op2.info.type == DOUBLE_VAL)
+			{
+
+			}
+			else
+				yyerror("Invalid conversion!");			
 		}
 		if(op1.info.type == INT_32 && (op2.info.type != INT_32))
 		{
